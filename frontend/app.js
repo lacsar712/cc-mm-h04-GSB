@@ -1,0 +1,115 @@
+const tokenKey = "methane_token";
+let token = localStorage.getItem(tokenKey) || "";
+let role = localStorage.getItem("methane_role") || "";
+
+const loginBox = document.querySelector("#login");
+const appBox = document.querySelector("#app");
+const rows = document.querySelector("#rows");
+const live = document.querySelector("#live");
+const form = document.querySelector("#form");
+const rankBox = document.querySelector("#rank");
+const latestBox = document.querySelector("#latest");
+
+function paint(list) {
+  const ordered = [...list].sort((a, b) => a.id - b.id);
+  rows.innerHTML = ordered
+    .map(
+      (r) =>
+        `<tr data-id="${r.id}"><td>${r.site}</td><td>${r.ch4_pct}</td><td class="${r.level === "报警" ? "alarm" : "ok"}">${r.level}</td><td>${r.note}</td></tr>`,
+    )
+    .join("");
+}
+
+function paintRank(notes) {
+  if (!rankBox) return;
+  rankBox.innerHTML = (notes || [])
+    .map((n) => `<li>${n.site} 名次 ${n.position} ${n.reason}</li>`)
+    .join("");
+}
+
+async function api(path, options = {}) {
+  const res = await fetch(path, {
+    ...options,
+    headers: {
+      "Content-Type": "application/json",
+      ...(token ? { Authorization: `Bearer ${token}` } : {}),
+      ...(options.headers || {}),
+    },
+  });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(data.detail || "请求失败");
+  return data;
+}
+
+function showApp() {
+  loginBox.hidden = true;
+  appBox.hidden = false;
+  document.querySelector("#who").textContent = role === "writer" ? "检查员" : "查看";
+  document.querySelector("#out").hidden = false;
+  form.hidden = role !== "writer";
+  connect();
+  load();
+}
+
+async function load() {
+  const data = await api("/api/readings");
+  const items = Array.isArray(data) ? data : data.items || [];
+  paint(items);
+  paintRank(data.rank_note || []);
+  if (items.length) {
+    const site = items[0].site;
+    const latest = await api(`/api/readings/latest/${encodeURIComponent(site)}`);
+    if (latestBox) {
+      latestBox.textContent = latest.id
+        ? `同测点最近一笔编号 ${latest.id}（${latest.site}）`
+        : "同测点暂无记录";
+    }
+  }
+}
+
+function connect() {
+  const proto = location.protocol === "https:" ? "wss" : "ws";
+  const ws = new WebSocket(`${proto}://${location.host}/ws/alerts`);
+  ws.onmessage = (ev) => {
+    const row = JSON.parse(ev.data);
+    live.textContent = `刚推送：${row.site} ${row.level}`;
+    load();
+  };
+}
+
+document.querySelector("#go").onclick = async () => {
+  const data = await api("/api/auth/login", {
+    method: "POST",
+    body: JSON.stringify({
+      username: document.querySelector("#user").value,
+      password: document.querySelector("#pass").value,
+    }),
+  });
+  token = data.access_token;
+  role = data.role;
+  localStorage.setItem(tokenKey, token);
+  localStorage.setItem("methane_role", role);
+  showApp();
+};
+
+form.onsubmit = async (e) => {
+  e.preventDefault();
+  try {
+    await api("/api/readings", {
+      method: "POST",
+      body: JSON.stringify({
+        site: document.querySelector("#site").value,
+        ch4_pct: Number(document.querySelector("#ch4").value),
+      }),
+    });
+  } catch (err) {
+    live.textContent = err.message;
+  }
+};
+
+document.querySelector("#out").onclick = () => {
+  localStorage.clear();
+  location.reload();
+};
+
+if (token) showApp();
