@@ -9,7 +9,6 @@ from pydantic_settings import BaseSettings
 from sqlalchemy import DateTime, Float, String, create_engine
 from sqlalchemy.orm import DeclarativeBase, Mapped, Session, mapped_column, sessionmaker
 
-from app.order_skew import latest_payload, list_payload
 from app.rules import classify
 
 
@@ -45,6 +44,9 @@ class Reading(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
 
 
+SEED_READINGS = (("东翼-12", 0.35), ("回风巷", 1.4))
+
+
 class LoginIn(BaseModel):
     username: str
     password: str
@@ -53,6 +55,25 @@ class LoginIn(BaseModel):
 class ReadingIn(BaseModel):
     site: str = Field(min_length=1, max_length=80)
     ch4_pct: float
+
+
+def get_db():
+    db = SessionLocal()
+    try:
+        yield db
+    finally:
+        db.close()
+
+
+def serialize_row(row: Reading) -> dict:
+    return {
+        "id": row.id,
+        "site": row.site,
+        "ch4_pct": row.ch4_pct,
+        "level": row.level,
+        "note": row.note,
+        "created_by": row.created_by,
+    }
 
 
 def current_user(credentials: HTTPAuthorizationCredentials | None = Depends(security)) -> dict:
@@ -85,7 +106,7 @@ def startup():
     try:
         if db.query(Reading).count() == 0:
             now = datetime.now(timezone.utc)
-            for site, ch4 in (("东翼-12", 0.35), ("回风巷", 1.4)):
+            for site, ch4 in SEED_READINGS:
                 level, note = classify(ch4)
                 db.add(
                     Reading(
@@ -122,44 +143,41 @@ def login(body: LoginIn):
 
 
 @app.get("/api/readings")
-def list_readings(_user: dict = Depends(current_user)):
-    db = SessionLocal()
-    try:
-        rows = db.query(Reading).all()
-        return list_payload(rows)
-    finally:
-        db.close()
+def list_readings(db: Session = Depends(get_db), _user: dict = Depends(current_user)):
+    # 新写入的记录编号更大，总表固定按编号倒序，最新一笔排在最前。
+    rows = db.query(Reading).order_by(Reading.id.desc()).all()
+    return {"items": [serialize_row(row) for row in rows]}
 
 
 @app.get("/api/readings/latest/{site}")
-def latest_reading(site: str, _user: dict = Depends(current_user)):
-    db = SessionLocal()
-    try:
-        rows = db.query(Reading).filter(Reading.site == site).all()
-        return latest_payload(rows)
-    finally:
-        db.close()
+def latest_reading(site: str, db: Session = Depends(get_db), _user: dict = Depends(current_user)):
+    # 同测点取最近一笔：按编号倒序取第一条，即后写入的那条。
+    row = (
+        db.query(Reading)
+        .filter(Reading.site == site)
+        .order_by(Reading.id.desc())
+        .first()
+    )
+    if row is None:
+        raise HTTPException(status_code=404, detail="该测点暂无记录")
+    return serialize_row(row)
 
 
 @app.post("/api/readings", status_code=201)
-async def create_reading(body: ReadingIn, user: dict = Depends(require_writer)):
+async def create_reading(body: ReadingIn, user: dict = Depends(require_writer), db: Session = Depends(get_db)):
     level, note = classify(body.ch4_pct)
-    db = SessionLocal()
-    try:
-        row = Reading(
-            site=body.site.strip(),
-            ch4_pct=body.ch4_pct,
-            level=level,
-            note=note,
-            created_by=user["username"],
-            created_at=datetime.now(timezone.utc),
-        )
-        db.add(row)
-        db.commit()
-        db.refresh(row)
-        payload = {"id": row.id, "site": row.site, "ch4_pct": row.ch4_pct, "level": row.level, "note": row.note}
-    finally:
-        db.close()
+    row = Reading(
+        site=body.site.strip(),
+        ch4_pct=body.ch4_pct,
+        level=level,
+        note=note,
+        created_by=user["username"],
+        created_at=datetime.now(timezone.utc),
+    )
+    db.add(row)
+    db.commit()
+    db.refresh(row)
+    payload = {"id": row.id, "site": row.site, "ch4_pct": row.ch4_pct, "level": row.level, "note": row.note}
     dead = []
     for ws in list(sockets):
         try:

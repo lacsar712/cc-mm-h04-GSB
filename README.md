@@ -29,3 +29,16 @@ docker compose up --build
 1. 用 gasman 登录，列表里回风巷是报警，东翼-12 是正常。
 2. 再开一个浏览器窗口同时看列表，上报一个大于等于 1 的测点，两个窗口都会出现新记录。
 3. viewer 登录后没有上报表单。
+
+## 排序约定
+
+总表固定按编号倒序（`ORDER BY id DESC`），新写入的记录排在最前；`/api/readings/latest/{site}` 同测点取编号最大的一笔，即后写入的记录。
+
+## 测试
+
+```bash
+cd backend
+pip install -r requirements.txt -r requirements-dev.txt
+python3 -m pytest
+```
+
