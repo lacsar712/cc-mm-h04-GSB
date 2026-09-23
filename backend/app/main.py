@@ -9,7 +9,6 @@ from pydantic_settings import BaseSettings
 from sqlalchemy import DateTime, Float, String, create_engine
 from sqlalchemy.orm import DeclarativeBase, Mapped, Session, mapped_column, sessionmaker
 
-from app.order_skew import latest_payload, list_payload
 from app.rules import classify
 
 
@@ -53,6 +52,17 @@ class LoginIn(BaseModel):
 class ReadingIn(BaseModel):
     site: str = Field(min_length=1, max_length=80)
     ch4_pct: float
+
+
+def serialize_row(row: Reading) -> dict:
+    return {
+        "id": row.id,
+        "site": row.site,
+        "ch4_pct": row.ch4_pct,
+        "level": row.level,
+        "note": row.note,
+        "created_by": row.created_by,
+    }
 
 
 def current_user(credentials: HTTPAuthorizationCredentials | None = Depends(security)) -> dict:
@@ -125,8 +135,8 @@ def login(body: LoginIn):
 def list_readings(_user: dict = Depends(current_user)):
     db = SessionLocal()
     try:
-        rows = db.query(Reading).all()
-        return list_payload(rows)
+        rows = db.query(Reading).order_by(Reading.id.desc()).all()
+        return {"items": [serialize_row(row) for row in rows]}
     finally:
         db.close()
 
@@ -135,8 +145,15 @@ def list_readings(_user: dict = Depends(current_user)):
 def latest_reading(site: str, _user: dict = Depends(current_user)):
     db = SessionLocal()
     try:
-        rows = db.query(Reading).filter(Reading.site == site).all()
-        return latest_payload(rows)
+        row = (
+            db.query(Reading)
+            .filter(Reading.site == site)
+            .order_by(Reading.id.desc())
+            .first()
+        )
+        if row is None:
+            return {"id": None}
+        return serialize_row(row)
     finally:
         db.close()
 
@@ -157,7 +174,7 @@ async def create_reading(body: ReadingIn, user: dict = Depends(require_writer)):
         db.add(row)
         db.commit()
         db.refresh(row)
-        payload = {"id": row.id, "site": row.site, "ch4_pct": row.ch4_pct, "level": row.level, "note": row.note}
+        payload = serialize_row(row)
     finally:
         db.close()
     dead = []

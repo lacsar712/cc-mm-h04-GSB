@@ -7,23 +7,14 @@ const appBox = document.querySelector("#app");
 const rows = document.querySelector("#rows");
 const live = document.querySelector("#live");
 const form = document.querySelector("#form");
-const rankBox = document.querySelector("#rank");
 const latestBox = document.querySelector("#latest");
 
 function paint(list) {
-  const ordered = [...list].sort((a, b) => a.id - b.id);
-  rows.innerHTML = ordered
+  rows.innerHTML = list
     .map(
       (r) =>
         `<tr data-id="${r.id}"><td>${r.site}</td><td>${r.ch4_pct}</td><td class="${r.level === "报警" ? "alarm" : "ok"}">${r.level}</td><td>${r.note}</td></tr>`,
     )
-    .join("");
-}
-
-function paintRank(notes) {
-  if (!rankBox) return;
-  rankBox.innerHTML = (notes || [])
-    .map((n) => `<li>${n.site} 名次 ${n.position} ${n.reason}</li>`)
     .join("");
 }
 
@@ -55,7 +46,6 @@ async function load() {
   const data = await api("/api/readings");
   const items = Array.isArray(data) ? data : data.items || [];
   paint(items);
-  paintRank(data.rank_note || []);
   if (items.length) {
     const site = items[0].site;
     const latest = await api(`/api/readings/latest/${encodeURIComponent(site)}`);
